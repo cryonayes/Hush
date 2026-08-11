@@ -1,17 +1,38 @@
 import CoreAudio
 import Accelerate
 import Synchronization
+import AVFoundation
 
 enum TapError: LocalizedError {
     case os(String, OSStatus)
     case noOutputDevice
     case unsupportedFormat
+    case permissionDenied
+
     var errorDescription: String? {
         switch self {
-        case .os(let what, let s): return "\(what) failed (\(s))"
-        case .noOutputDevice: return "No default output device"
-        case .unsupportedFormat: return "Tap is not 32-bit float PCM"
+        case .permissionDenied:
+            return "Hush needs permission to capture audio."
+        case .os(let what, let status):
+            // Creating the tap is what triggers the system prompt, so a failure
+            // here while permission is still undecided is almost always the user
+            // not having answered it yet — say that instead of an OSStatus.
+            if what.contains("ProcessTap"),
+               AVCaptureDevice.authorizationStatus(for: .audio) == .notDetermined {
+                return "Allow audio capture when macOS asks, then try again."
+            }
+            return "\(what) failed (\(status))"
+        case .noOutputDevice:
+            return "No default output device"
+        case .unsupportedFormat:
+            return "Tap is not 32-bit float PCM"
         }
+    }
+
+    /// Whether the fix is a trip to System Settings, so the UI can offer the button.
+    var isPermissionProblem: Bool {
+        if case .permissionDenied = self { return true }
+        return false
     }
 }
 
@@ -49,6 +70,12 @@ final class AppTap {
     private var tapChannels = 2
 
     init(app: AudioApp) throws {
+        // Checking the status beats mapping OSStatus codes: a denied tap and a
+        // failed-for-other-reasons tap are indistinguishable from the return value.
+        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+        case .denied, .restricted: throw TapError.permissionDenied
+        default: break
+        }
         guard let outputUID = defaultOutputDeviceUID else { throw TapError.noOutputDevice }
         self.outputUID = outputUID
         processIDs = app.processIDs

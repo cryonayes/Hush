@@ -1,5 +1,6 @@
 import AppKit
 import CoreAudio
+import AVFoundation
 
 // Creates a real tap and prints its format — the only way to check the
 // float32 guard in AppTap without dragging a slider. Needs the audio
@@ -31,8 +32,10 @@ if CommandLine.arguments.contains("--list") {
     for a in apps {
         print("\(a.isPlaying ? "▶" : " ") \(a.name)\t\(a.id)\t\(a.processIDs.count) process(es)")
     }
+    let auth = AVCaptureDevice.authorizationStatus(for: .audio)
     print("\(apps.count) app(s), \(apps.filter(\.isPlaying).count) playing, "
-          + "output device: \(defaultOutputDeviceUID ?? "none")")
+          + "output device: \(defaultOutputDeviceUID ?? "none"), "
+          + "audio capture: \(["notDetermined", "restricted", "denied", "authorized"][auth.rawValue])")
     exit(apps.isEmpty ? 1 : 0)
 }
 

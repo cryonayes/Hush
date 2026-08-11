@@ -7,6 +7,7 @@ final class MixerModel: ObservableObject {
     @Published private(set) var volumes: [String: Float] = Settings.volumes
     @Published private(set) var muted: Set<String> = Settings.muted
     @Published var error: String?
+    @Published var errorIsPermission = false
 
     private var taps: [String: AppTap] = [:]
 
@@ -110,8 +111,10 @@ final class MixerModel: ObservableObject {
                 tap.gain = gain
                 taps[app.id] = tap
                 error = nil
+                errorIsPermission = false
             } catch {
                 self.error = error.localizedDescription
+                self.errorIsPermission = (error as? TapError)?.isPermissionProblem ?? false
             }
         }
     }
@@ -174,7 +177,16 @@ struct MixerView: View {
                 row(app).opacity(app.isPlaying ? 1 : 0.55)
             }
             if let error = model.error {
-                Text(error).font(.caption).foregroundStyle(.red)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(error).font(.caption).foregroundStyle(.red)
+                    if model.errorIsPermission {
+                        Button("Open Privacy Settings") {
+                            NSWorkspace.shared.open(URL(string:
+                                "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")!)
+                        }
+                        .font(.caption)
+                    }
+                }
             }
         }
         .padding(12)
