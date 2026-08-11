@@ -3,7 +3,7 @@ import CoreAudio
 
 // Creates a real tap and prints its format — the only way to check the
 // float32 guard in AppTap without dragging a slider. Needs the audio
-// capture permission, so run the copy inside VolumeMixer.app.
+// capture permission, so run the copy inside Hush.app.
 if CommandLine.arguments.contains("--tapfmt") {
     guard let app = AudioApp.all().first(where: \.isPlaying) else {
         print("nothing playing"); exit(1)

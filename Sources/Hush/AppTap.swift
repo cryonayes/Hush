@@ -41,7 +41,7 @@ final class AppTap {
         processIDs = app.processIDs
 
         let desc = CATapDescription(stereoMixdownOfProcesses: app.processIDs)
-        desc.name = "VolumeMixer-\(app.id)"
+        desc.name = "Hush-\(app.id)"
         desc.uuid = UUID()
         desc.isPrivate = true
         desc.muteBehavior = .mutedWhenTapped   // app's own path goes silent; we own playback now
@@ -56,7 +56,7 @@ final class AppTap {
         else { stop(); throw TapError.unsupportedFormat }
 
         let aggregate: [String: Any] = [
-            kAudioAggregateDeviceNameKey: "VolumeMixer \(app.id)",
+            kAudioAggregateDeviceNameKey: "Hush \(app.id)",
             kAudioAggregateDeviceUIDKey: UUID().uuidString,
             kAudioAggregateDeviceMainSubDeviceKey: outputUID,
             kAudioAggregateDeviceIsPrivateKey: true,
@@ -71,7 +71,7 @@ final class AppTap {
         try check(AudioHardwareCreateAggregateDevice(aggregate as CFDictionary, &aggID),
                   "AudioHardwareCreateAggregateDevice")
 
-        let queue = DispatchQueue(label: "volumemixer.io.\(app.id)", qos: .userInteractive)
+        let queue = DispatchQueue(label: "hush.io.\(app.id)", qos: .userInteractive)
         try check(AudioDeviceCreateIOProcIDWithBlock(&procID, aggID, queue) { [weak self] _, input, _, output, _ in
             self?.render(input, output)
         }, "AudioDeviceCreateIOProcIDWithBlock")

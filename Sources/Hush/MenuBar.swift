@@ -27,7 +27,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         login.target = self
         menu.addItem(login)
         menu.addItem(.separator())
-        let quit = NSMenuItem(title: "Quit Volume Mixer",
+        let quit = NSMenuItem(title: "Quit Hush",
                               action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         menu.addItem(quit)
         return menu
@@ -39,7 +39,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         // Vertical faders match the app icon and read as a mixer, not as "settings".
         statusItem.button?.image = NSImage(systemSymbolName: "slider.vertical.3",
-                                           accessibilityDescription: "Volume Mixer")
+                                           accessibilityDescription: "Hush")
         statusItem.button?.target = self
         statusItem.button?.action = #selector(statusItemClicked)
         statusItem.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
