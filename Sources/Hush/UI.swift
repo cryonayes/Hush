@@ -9,14 +9,37 @@ final class MixerModel: ObservableObject {
     @Published var error: String?
 
     private var taps: [String: AppTap] = [:]
-    private var timer: Timer?
+
+    /// Refreshed by the device listener rather than re-read per slider tick — this
+    /// is a CoreAudio round trip and `syncTaps()` runs on every pixel of a drag.
+    private var outputUID: String? = defaultOutputDeviceUID
+
+    private var pollTimer: Timer?
+    private var playingProcesses: Set<AudioObjectID> = []
+    private var persistTask: Task<Void, Never>?
 
     init() {
         refresh()
-        timer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { _ in
-            Task { @MainActor in self.refresh() }
-        }
         watchOutputDevice()
+        watchProcessList()
+
+        // CoreAudio accepts listeners on kAudioProcessPropertyIsRunningOutput and
+        // then never fires them — verified: 33 registrations, all status 0, zero
+        // callbacks while a process played for 11s. So "started/stopped playing" is
+        // the one thing left to poll. This only reads flags and calls refresh() when
+        // the set actually changes, rather than rebuilding the list every tick.
+        pollTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.pollPlaybackState() }
+        }
+    }
+
+    private func pollPlaybackState() {
+        let ids: [AudioObjectID] = caArray(AudioObjectID(kAudioObjectSystemObject),
+                                           kAudioHardwarePropertyProcessObjectList)
+        let playing = Set(ids.filter { (caValue($0, kAudioProcessPropertyIsRunningOutput) ?? UInt32(0)) != 0 })
+        guard playing != playingProcesses else { return }
+        playingProcesses = playing
+        refresh()
     }
 
     func volume(_ id: String) -> Float { volumes[id] ?? 1.0 }
@@ -24,14 +47,25 @@ final class MixerModel: ObservableObject {
 
     func setVolume(_ value: Float, for app: AudioApp) {
         volumes[app.id] = value
-        Settings.volumes = volumes
         syncTaps()
+        persistSoon()
     }
 
     func toggleMute(_ app: AudioApp) {
         muted.formSymmetricDifference([app.id])
-        Settings.muted = muted
+        Settings.muted = muted      // discrete action, no need to coalesce
         syncTaps()
+    }
+
+    /// A drag emits a value per pixel; without this every one of them re-encodes
+    /// the whole volumes dictionary into UserDefaults.
+    private func persistSoon() {
+        persistTask?.cancel()
+        persistTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(400))
+            guard !Task.isCancelled else { return }
+            Settings.volumes = volumes
+        }
     }
 
     func refresh() {
@@ -44,7 +78,7 @@ final class MixerModel: ObservableObject {
     /// helper appearing under an app you already turned down, and an output device
     /// switch — all of which are the same problem, "this tap no longer matches".
     private func syncTaps() {
-        let currentUID = defaultOutputDeviceUID
+        let currentUID = outputUID
         let alive = Set(apps.map(\.id))
         for id in Array(taps.keys) where !alive.contains(id) {
             taps[id]?.stop()
@@ -85,14 +119,46 @@ final class MixerModel: ObservableObject {
     /// Rebuild taps when the user plugs in headphones — the aggregate device pins
     /// its output at creation, so an untouched tap would just go silent.
     private func watchOutputDevice() {
-        var addr = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDefaultOutputDevice,
+        listen(to: AudioObjectID(kAudioObjectSystemObject),
+               kAudioHardwarePropertyDefaultOutputDevice) { model in
+            model.outputUID = defaultOutputDeviceUID
+            model.syncTaps()
+        }
+    }
+
+    /// Processes appearing and disappearing — a new app launching, an old one quitting.
+    private func watchProcessList() {
+        listen(to: AudioObjectID(kAudioObjectSystemObject),
+               kAudioHardwarePropertyProcessObjectList) { $0.refresh() }
+    }
+
+    private func listen(to object: AudioObjectID, _ selector: AudioObjectPropertySelector,
+                        _ handler: @escaping @MainActor (MixerModel) -> Void) {
+        var addr = AudioObjectPropertyAddress(mSelector: selector,
                                               mScope: kAudioObjectPropertyScopeGlobal,
                                               mElement: kAudioObjectPropertyElementMain)
-        // ponytail: never removed — this object lives as long as the process does.
-        AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &addr,
-                                            DispatchQueue.main) { [weak self] _, _ in
-            Task { @MainActor in self?.syncTaps() }
+        let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            Task { @MainActor in
+                guard let self else { return }
+                handler(self)
+            }
         }
+        _ = AudioObjectAddPropertyListenerBlock(object, &addr, DispatchQueue.main, block)
+    }
+}
+
+/// `icon(forFile:)` hits Icon Services. Called from a view body it runs per row on
+/// every re-render, which during a slider drag is every frame.
+@MainActor
+enum IconCache {
+    private static var cache: [String: NSImage] = [:]
+
+    static func icon(_ path: String?) -> NSImage? {
+        guard let path else { return nil }
+        if let cached = cache[path] { return cached }
+        let icon = NSWorkspace.shared.icon(forFile: path)
+        cache[path] = icon
+        return icon
     }
 }
 
@@ -120,9 +186,8 @@ struct MixerView: View {
         let isMuted = model.isMuted(app.id)
         return VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 6) {
-                if let path = app.bundlePath {
-                    Image(nsImage: NSWorkspace.shared.icon(forFile: path))
-                        .resizable().frame(width: 16, height: 16)
+                if let icon = IconCache.icon(app.bundlePath) {
+                    Image(nsImage: icon).resizable().frame(width: 16, height: 16)
                 }
                 Text(app.name).lineLimit(1)
                 Spacer()
