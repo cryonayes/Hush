@@ -5,7 +5,7 @@ macOS itself doesn't offer. It uses CoreAudio process taps to mute an app's dire
 output and replay it at your chosen level, so it needs no kernel driver, no virtual
 audio device, and no admin install.
 
-Requires **macOS 14.2 or later**.
+Requires **macOS 15 or later**.
 
 ## Install
 

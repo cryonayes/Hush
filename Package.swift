@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "Hush",
-    platforms: [.macOS("14.2")],   // process taps land here
+    platforms: [.macOS("15.0")],   // 15 for Synchronization.Atomic; taps need 14.2
     targets: [
         .executableTarget(
             name: "Hush",

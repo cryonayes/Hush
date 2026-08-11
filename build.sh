@@ -24,7 +24,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
     <key>CFBundleName</key><string>Hush</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>0.1</string>
-    <key>LSMinimumSystemVersion</key><string>14.2</string>
+    <key>LSMinimumSystemVersion</key><string>15.0</string>
     <key>LSUIElement</key><true/>
     <key>NSAudioCaptureUsageDescription</key>
     <string>Hush taps app audio so it can play it back at the volume you choose.</string>
