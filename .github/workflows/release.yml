@@ -13,6 +13,8 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # build.sh reads the version from the latest tag
 
       - name: Build
         run: ./build.sh

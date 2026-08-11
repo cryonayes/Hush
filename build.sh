@@ -7,13 +7,18 @@ cd "$(dirname "$0")"
 swift build -c release
 [ -f AppIcon.icns ] || swift make-icon.swift
 
+# Version comes from the latest tag so a release can't ship claiming an old one.
+VERSION=$(git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//' || true)
+VERSION=${VERSION:-0.0.0}
+BUILD=$(git rev-list --count HEAD 2>/dev/null || echo 1)
+
 APP="Hush.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp .build/release/Hush "$APP/Contents/MacOS/"
 cp AppIcon.icns "$APP/Contents/Resources/"
 
-cat > "$APP/Contents/Info.plist" <<'PLIST'
+cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -23,12 +28,11 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
     <key>CFBundleIdentifier</key><string>com.cryonayes.hush</string>
     <key>CFBundleName</key><string>Hush</string>
     <key>CFBundlePackageType</key><string>APPL</string>
-    <key>CFBundleShortVersionString</key><string>0.1</string>
+    <key>CFBundleShortVersionString</key><string>${VERSION}</string>
+    <key>CFBundleVersion</key><string>${BUILD}</string>
     <key>LSMinimumSystemVersion</key><string>15.0</string>
     <key>LSUIElement</key><true/>
     <key>NSAudioCaptureUsageDescription</key>
-    <string>Hush taps app audio so it can play it back at the volume you choose.</string>
-    <key>NSMicrophoneUsageDescription</key>
     <string>Hush taps app audio so it can play it back at the volume you choose.</string>
 </dict>
 </plist>
