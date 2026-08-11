@@ -1,5 +1,6 @@
 import CoreAudio
 import Accelerate
+import Synchronization
 
 enum TapError: LocalizedError {
     case os(String, OSStatus)
@@ -22,13 +23,17 @@ final class AppTap {
     private var procID: AudioDeviceIOProcID?
 
     /// Target gain. 1.0 is untouched; above 1.0 amplifies. Written from the UI,
-    /// read on the audio thread without synchronisation: a naturally aligned Float
-    /// load/store won't tear on arm64, but this is a data race by the language
-    /// model, not a guarantee. `Synchronization.Atomic` is the real fix and needs
-    /// macOS 15; we still support 14.2. A lock would be worse — not audio-thread safe.
-    var gain: Float = 1.0
+    /// read on the audio thread. Lock-free by necessity — a mutex on the audio
+    /// thread is exactly the stall we're avoiding. Relaxed ordering is enough:
+    /// there's nothing else to order against, and a gain arriving one buffer late
+    /// is inaudible thanks to the ramp in render().
+    private let atomicGain = Atomic<Float>(1.0)
+    var gain: Float {
+        get { atomicGain.load(ordering: .relaxed) }
+        set { atomicGain.store(newValue, ordering: .relaxed) }
+    }
 
-    /// Where the ramp starts each render — IO thread only.
+    /// Where the ramp starts each render — audio thread only.
     private var lastGain: Float = 1.0
 
     /// The processes this tap covers, so the model can spot a helper appearing later.
@@ -36,6 +41,12 @@ final class AppTap {
 
     /// The device this tap was built against. Goes stale when the user switches output.
     let outputUID: String
+
+    /// Set when the output device is interleaved with a different channel count than
+    /// the tap's stereo mixdown — HDMI and AV receivers land here. Holds the output's
+    /// channel count; nil means the buffers line up and render() can copy straight.
+    private var interleavedOutputChannels: Int?
+    private var tapChannels = 2
 
     init(app: AudioApp) throws {
         guard let outputUID = defaultOutputDeviceUID else { throw TapError.noOutputDevice }
@@ -56,6 +67,7 @@ final class AppTap {
               format.mFormatFlags & kAudioFormatFlagIsFloat != 0,
               format.mBitsPerChannel == 32
         else { stop(); throw TapError.unsupportedFormat }
+        tapChannels = Int(format.mChannelsPerFrame)
 
         let aggregate: [String: Any] = [
             kAudioAggregateDeviceNameKey: "Hush \(app.id)",
@@ -85,6 +97,16 @@ final class AppTap {
             self.render(input, output)
         }, "AudioDeviceCreateIOProcIDWithBlock")
 
+        // A 5.1 output hands us one interleaved buffer of 6 channels. Copying a
+        // stereo buffer into the front of it would scatter L/R across the wrong
+        // speakers, so that case needs a strided per-channel copy instead.
+        if let out: AudioStreamBasicDescription = caValue(aggID, kAudioDevicePropertyStreamFormat,
+                                                          scope: kAudioObjectPropertyScopeOutput),
+           out.mFormatFlags & kAudioFormatFlagIsNonInterleaved == 0,
+           Int(out.mChannelsPerFrame) != tapChannels {
+            interleavedOutputChannels = Int(out.mChannelsPerFrame)
+        }
+
         try check(AudioDeviceStart(aggID, procID), "AudioDeviceStart")
     }
 
@@ -92,15 +114,18 @@ final class AppTap {
     /// the previous buffer's value — a flat multiply would step on every slider
     /// move and click audibly.
     ///
-    /// ponytail: tap-channels == device-channels, which is what a stereo mixdown
-    /// into a normal output gives you. Extra output channels get silence; a real
-    /// mixer would need a channel map here.
     private func render(_ input: UnsafePointer<AudioBufferList>,
                        _ output: UnsafeMutablePointer<AudioBufferList>) {
         let ins = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: input))
         let outs = UnsafeMutableAudioBufferListPointer(output)
         let target = gain
         var lo: Float = -1, hi: Float = 1
+
+        if let outChannels = interleavedOutputChannels {
+            renderStrided(ins, outs, target: target, outChannels: outChannels, lo: &lo, hi: &hi)
+            lastGain = target
+            return
+        }
 
         for i in 0..<outs.count {
             guard let dst = outs[i].mData else { continue }
@@ -124,6 +149,38 @@ final class AppTap {
             }
         }
         lastGain = target
+    }
+
+    /// Stereo into a wider interleaved output: place the tap's channels on the
+    /// output's first channels one at a time, and silence the rest. Without this,
+    /// 5.1 output gets stereo smeared across the wrong speakers at the wrong rate.
+    private func renderStrided(_ ins: UnsafeMutableAudioBufferListPointer,
+                               _ outs: UnsafeMutableAudioBufferListPointer,
+                               target: Float, outChannels: Int,
+                               lo: inout Float, hi: inout Float) {
+        guard let srcRaw = ins.count > 0 ? ins[0].mData : nil,
+              let dstRaw = outs.count > 0 ? outs[0].mData : nil else { return }
+        let src = srcRaw.assumingMemoryBound(to: Float.self)
+        let dst = dstRaw.assumingMemoryBound(to: Float.self)
+
+        let frames = min(Int(ins[0].mDataByteSize) / (4 * tapChannels),
+                         Int(outs[0].mDataByteSize) / (4 * outChannels))
+        guard frames > 0 else { return }
+        let n = vDSP_Length(frames)
+
+        for ch in 0..<min(tapChannels, outChannels) {
+            var start = lastGain                      // same ramp on every channel
+            var step = (target - start) / Float(frames)
+            vDSP_vrampmul(src + ch, vDSP_Stride(tapChannels), &start, &step,
+                          dst + ch, vDSP_Stride(outChannels), n)
+            if target > 1 || lastGain > 1 {
+                vDSP_vclip(dst + ch, vDSP_Stride(outChannels), &lo, &hi,
+                           dst + ch, vDSP_Stride(outChannels), n)
+            }
+        }
+        for ch in tapChannels..<outChannels {
+            vDSP_vclr(dst + ch, vDSP_Stride(outChannels), n)
+        }
     }
 
     private func check(_ status: OSStatus, _ what: String) throws {
