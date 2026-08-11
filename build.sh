@@ -35,4 +35,14 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 PLIST
 
 codesign --force --sign - --identifier com.cryonayes.hush "$APP"
-echo "Built $APP — open it, then look for the slider icon in the menu bar."
+
+if [ "${1:-}" = "--install" ]; then
+    # A running copy holds its own bundle open; replace it cleanly.
+    pkill -f "/Hush.app/Contents/MacOS/Hush" 2>/dev/null || true
+    rm -rf /Applications/Hush.app
+    cp -R "$APP" /Applications/
+    open /Applications/Hush.app
+    echo "Installed to /Applications/Hush.app and launched."
+else
+    echo "Built $APP — run ./build.sh --install to put it in /Applications."
+fi
