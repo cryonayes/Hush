@@ -1,0 +1,36 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        run: ./build.sh
+
+      - name: Smoke check
+        run: ./Hush.app/Contents/MacOS/Hush --list || true   # exits 1 when nothing is playing
+
+      # ditto, not zip — it preserves the bundle's code signature.
+      - name: Package
+        run: ditto -c -k --sequesterRsrc --keepParent Hush.app Hush.zip
+
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release create "${GITHUB_REF_NAME}" Hush.zip --generate-notes
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Hush
+          path: Hush.zip
