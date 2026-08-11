@@ -27,11 +27,25 @@ func caArray<T>(_ obj: AudioObjectID, _ selector: AudioObjectPropertySelector,
     return Array(UnsafeBufferPointer(start: buf, count: count))
 }
 
+/// CFString properties come back +1 retained. Loading one through `caValue` would
+/// copy it out with a second retain and leak the first, so strings get their own
+/// reader that takes ownership explicitly.
+func caString(_ obj: AudioObjectID, _ selector: AudioObjectPropertySelector,
+              scope: AudioObjectPropertyScope = kAudioObjectPropertyScopeGlobal) -> String? {
+    var addr = AudioObjectPropertyAddress(mSelector: selector, mScope: scope,
+                                          mElement: kAudioObjectPropertyElementMain)
+    var size = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
+    var raw: Unmanaged<CFString>?
+    guard AudioObjectGetPropertyData(obj, &addr, 0, nil, &size, &raw) == noErr,
+          let value = raw?.takeRetainedValue() else { return nil }
+    return value as String
+}
+
 var defaultOutputDeviceUID: String? {
     guard let dev: AudioDeviceID = caValue(AudioObjectID(kAudioObjectSystemObject),
-                                           kAudioHardwarePropertyDefaultOutputDevice),
-          let uid: CFString = caValue(dev, kAudioDevicePropertyDeviceUID) else { return nil }
-    return uid as String
+                                           kAudioHardwarePropertyDefaultOutputDevice)
+    else { return nil }
+    return caString(dev, kAudioDevicePropertyDeviceUID)
 }
 
 /// One row in the mixer. An app can play through several processes (browser and
