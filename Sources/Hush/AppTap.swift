@@ -22,8 +22,10 @@ final class AppTap {
     private var procID: AudioDeviceIOProcID?
 
     /// Target gain. 1.0 is untouched; above 1.0 amplifies. Written from the UI,
-    /// read on the IO thread — ponytail: a lone Float store is atomic on arm64; if
-    /// this ever grows into multi-field EQ state, swap in a lock-free double buffer.
+    /// read on the audio thread without synchronisation: a naturally aligned Float
+    /// load/store won't tear on arm64, but this is a data race by the language
+    /// model, not a guarantee. `Synchronization.Atomic` is the real fix and needs
+    /// macOS 15; we still support 14.2. A lock would be worse — not audio-thread safe.
     var gain: Float = 1.0
 
     /// Where the ramp starts each render — IO thread only.
@@ -71,9 +73,16 @@ final class AppTap {
         try check(AudioHardwareCreateAggregateDevice(aggregate as CFDictionary, &aggID),
                   "AudioHardwareCreateAggregateDevice")
 
-        let queue = DispatchQueue(label: "hush.io.\(app.id)", qos: .userInteractive)
-        try check(AudioDeviceCreateIOProcIDWithBlock(&procID, aggID, queue) { [weak self] _, input, _, output, _ in
-            self?.render(input, output)
+        // nil queue == invoked directly on CoreAudio's real-time thread. Passing a
+        // dispatch queue makes that thread hop synchronously onto ours every buffer:
+        // extra latency, jitter, and a priority inversion under load.
+        //
+        // That puts render() on the audio thread, so it must not allocate, lock, or
+        // touch ARC. `unowned(unsafe)` avoids the weak-table lock a `weak` capture
+        // would take; it's safe because stop() runs first thing in deinit and
+        // AudioDeviceStop blocks until any in-flight render() has returned.
+        try check(AudioDeviceCreateIOProcIDWithBlock(&procID, aggID, nil) { [unowned(unsafe) self] _, input, _, output, _ in
+            self.render(input, output)
         }, "AudioDeviceCreateIOProcIDWithBlock")
 
         try check(AudioDeviceStart(aggID, procID), "AudioDeviceStart")
